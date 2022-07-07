@@ -1,0 +1,370 @@
+-- Data obtained from data.kcmo.org
+
+-- Create tables for KC Crime data from 2019 and 2020
+
+CREATE TABLE kccrime2019
+(
+Report_No VARCHAR(50),
+Reported_Date DATE,
+Reported_Time TIME,
+From_Date DATE,
+From_Time TIME,
+To_Date DATE,
+To_Time TIME,
+Offense VARCHAR(250),
+IBRS VARCHAR(50),
+Description VARCHAR(250),
+Beat VARCHAR(50),
+Address VARCHAR(250),
+City VARCHAR(50),
+Zip_Code INT,
+Rep_Dist VARCHAR(50),
+Area VARCHAR(50),
+DVFlag VARCHAR(50),
+Involvement VARCHAR(50),
+Race VARCHAR(50),
+Sex VARCHAR(50),
+Age VARCHAR(50),
+Firearm_Used VARCHAR(50),
+Location VARCHAR(250),
+);
+
+CREATE TABLE kccrime2020
+(
+Report_No VARCHAR(50),
+Reported_Date DATE,
+Reported_Time TIME,
+From_Date DATE,
+From_Time TIME,
+To_Date DATE,
+To_Time TIME,
+Offense VARCHAR(250),
+IBRS VARCHAR(50),
+Description VARCHAR(250),
+Beat VARCHAR(50),
+Address VARCHAR(250),
+City VARCHAR(50),
+Zip_Code INT,
+Rep_Dist VARCHAR(50),
+Area VARCHAR(50),
+DVFlag VARCHAR(50),
+Involvement VARCHAR(50),
+Race VARCHAR(50),
+Sex VARCHAR(50),
+Age VARCHAR(50),
+Firearm_Used VARCHAR(50),
+Location VARCHAR(250),
+);
+
+-- Combine data from 2019 and 2020
+
+CREATE TABLE kccrime19_20
+AS
+SELECT *
+FROM kccrime2019
+UNION
+SELECT *
+FROM kccrime2020;
+
+--- Cleaning data
+
+-- Standardize report_no column
+
+UPDATE kccrime19_20
+SET report_no = REPLACE(report_no, 'RM', '');
+
+UPDATE kccrime19_20
+SET report_no = REPLACE(report_no, 'KC', '');
+
+-- Combine address and city into new column
+
+ALTER TABLE kccrime19_20
+Add Address_Combined VARCHAR(250);
+
+UPDATE kccrime19_20
+SET address_combined = CONCAT (address, ', ', city);
+
+SELECT *
+FROM kccrime19_20;
+
+-- Separate address, latitude, longitude into separate columns from location column
+-- Convert latitude and longitude to correct data type
+
+SELECT *,
+SPLIT_PART(location, '(', 1) AS addresscity, 
+SPLIT_PART(location, '(', 2) AS lat_long
+FROM kccrime19_20;
+
+ALTER TABLE kccrime19_20
+Add Addresscity VARCHAR(250),
+Add Lat_Long VARCHAR(250);
+
+UPDATE kccrime19_20
+SET addresscity = SPLIT_PART(location, '(', 1);
+
+UPDATE kccrime19_20
+SET lat_long = SPLIT_PART(location, '(', 2);
+
+SELECT LEFT(lat_long, -1)
+FROM kccrime19_20;
+
+UPDATE kccrime19_20
+SET lat_long = LEFT(lat_long, -1);
+
+SELECT *,
+SPLIT_PART(lat_long, ',', 1) AS latitude, 
+SPLIT_PART(lat_long, ',', 2) AS longitude
+FROM kccrime19_20;
+
+ALTER TABLE kccrime19_20
+Add Latitude VARCHAR(50),
+Add Longitude VARCHAR(50);
+
+UPDATE kccrime19_20
+SET latitude = SPLIT_PART(lat_long, ',', 1);
+
+UPDATE kccrime19_20
+SET longitude = SPLIT_PART(lat_long, ',', 2);
+
+UPDATE kccrime19_20
+SET latitude = CAST(latitude AS NUMERIC);
+
+UPDATE kccrime19_20
+SET longitude = CAST(longitude AS NUMERIC);
+
+SELECT *
+FROM kccrime19_20;
+
+-- Change Y, N, U to Yes, No, and Unknown in 'dvflag' field
+
+SELECT DISTINCT(dvflag), COUNT(dvflag)
+FROM kccrime19_20
+GROUP BY dvflag;
+
+SELECT dvflag,
+CASE WHEN dvflag = 'Y' THEN 'YES'
+     WHEN dvflag = 'N' THEN 'NO'
+     ELSE 'UNKOWN'
+     END
+FROM kccrime19_20;
+
+UPDATE kccrime19_20
+SET dvflag = CASE WHEN dvflag = 'Y' THEN 'YES'
+                  WHEN dvflag = 'N' THEN 'NO'
+                  ELSE 'UNKOWN'
+                  END;
+
+-- Convert age to correct data type, cleaned ages to under age 100
+
+UPDATE kccrime19_20
+SET age = CAST(age AS INT);
+
+ALTER TABLE kccrime19_20
+Add ageconverted INT;
+
+UPDATE kccrime19_20
+SET ageconverted = CAST(age AS INT);
+
+SELECT DISTINCT(ageconverted)
+FROM kccrime19_20;
+
+UPDATE kccrime19_20
+SET ageconverted = NULL 
+WHERE ageconverted >100;
+                  
+-- Delete unused columns 
+
+ALTER TABLE kccrime19_20
+DROP COLUMN ibrs,
+DROP COLUMN beat,
+DROP COLUMN rep_dist,
+DROP COLUMN area;
+
+SELECT *
+FROM kccrime19_20;
+
+
+--- Data exploration 
+
+-- Create view for distinct crimes
+-- Total distinct crimes in 2019 vs 2020
+
+CREATE VIEW distinctcrime
+AS
+(
+SELECT DISTINCT ON (report_no) report_no, reported_date, reported_time, offense, city, zip_code, dvflag, firearm_used, latitude, longitude
+FROM kccrime19_20
+ORDER BY 1);
+
+SELECT COUNT(report_no) AS TotalCrime19,
+(       
+    SELECT COUNT(report_no) AS TotalCrime20
+        FROM distinctcrime 
+        WHERE reported_date BETWEEN '2020-01-01' AND '2020-12-31')
+FROM distinctcrime
+WHERE reported_date BETWEEN '2019-01-01' AND '2019-12-31';
+
+-- Types of crimes 2019 and 2020
+
+SELECT offense, COUNT(offense) AS offensecount19
+FROM distinctcrime
+WHERE reported_date >= '2019-01-01' AND  reported_date <= '2019-12-31'
+GROUP BY offense
+ORDER BY COUNT(offense) DESC;
+
+SELECT offense, COUNT(offense) AS offensecount20
+FROM distinctcrime
+WHERE reported_date >= '2020-01-01' AND  reported_date <= '2020-12-31'
+GROUP BY offense
+ORDER BY COUNT(offense) DESC;
+
+SELECT offense, 
+       COUNT( CASE WHEN reported_date >= '2019-01-01' AND  reported_date <= '2019-12-31' THEN offense END) AS offense19,
+       COUNT( CASE WHEN reported_date >= '2020-01-01' AND  reported_date <= '2020-12-31' THEN firearm_used END) AS offense20
+FROM distinctcrime
+GROUP BY offense
+ORDER BY 2 DESC, 3 DESC
+LIMIT 10;
+
+-- Demographics of offenders (suspects and arrestees)
+-- Using temp tables and CTEs to calculate percentages
+
+SELECT DISTINCT ON(report_no) report_no, sex, race, ageconverted, 
+COUNT(sex) OVER (PARTITION BY sex) AS totalsex, 
+COUNT(race) OVER (PARTITION BY race) AS totalrace
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR';
+
+SELECT sex, COUNT(sex)
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR'
+GROUP BY sex
+ORDER BY COUNT(sex) DESC;
+
+DROP TABLE if exists offendersex;
+CREATE TEMP TABLE offendersex
+(
+sex VARCHAR(50),
+sex_count NUMERIC
+);
+
+INSERT INTO offendersex
+SELECT sex, COUNT(sex) AS sex_count
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR'
+GROUP BY sex;
+
+SELECT a.sex, a.sex_count, b.total_sex
+FROM offendersex a
+CROSS JOIN
+(
+    SELECT SUM (sex_count) AS total_sex FROM offendersex) b;
+    
+WITH offendersexpercent (sex, sex_count, total_sex)
+AS
+(SELECT a.sex, a.sex_count, b.total_sex
+FROM offendersex a
+CROSS JOIN
+(
+    SELECT SUM (sex_count) AS total_sex FROM offendersex) b
+)
+SELECT *, (sex_count/total_sex)*100 as sex_percentage
+FROM offendersexpercent
+WHERE sex_count <> 0;
+
+SELECT race, COUNT(race)
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR'
+GROUP BY race
+ORDER BY COUNT(race) DESC;
+
+DROP TABLE if exists offenderrace;
+CREATE TEMP TABLE offenderrace
+(
+race VARCHAR(50),
+race_count NUMERIC
+);
+
+INSERT INTO offenderrace
+SELECT race, COUNT(race) AS race_count
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR'
+GROUP BY race;
+
+SELECT a.race, a.race_count, b.total_race
+FROM offenderrace a
+CROSS JOIN
+(
+    SELECT SUM (race_count) AS total_race FROM offenderrace) b;
+    
+WITH offenderracepercent (race, race_count, total_race)
+AS
+(SELECT a.race, a.race_count, b.total_race
+FROM offenderrace a
+CROSS JOIN
+(
+    SELECT SUM (race_count) AS total_race FROM offenderrace) b
+)
+SELECT *, (race_count/total_race)*100 as race_percentage
+FROM offenderracepercent
+WHERE race_count <> 0;
+
+SELECT ageconverted, COUNT(ageconverted)
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR'
+GROUP BY ageconverted
+ORDER BY COUNT(ageconverted) DESC;
+
+SELECT AVG(ageconverted) AS average_age, MAX(ageconverted) AS max_age, MIN(ageconverted) AS min_age
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR';
+
+DROP TABLE if exists offenderagebands;
+CREATE TEMP TABLE offenderagebands
+(
+ageconverted NUMERIC,
+age_bands VARCHAR(50)
+);
+
+INSERT INTO offenderagebands
+SELECT COUNT(ageconverted) AS age_count,
+        CASE WHEN ageconverted < 30 THEN 'young adult'
+             WHEN ageconverted > 29 AND ageconverted < 50 THEN 'adult'
+             WHEN ageconverted > 50 AND ageconverted < 70 THEN 'older adult'
+             WHEN ageconverted > 69 THEN 'elderly'
+             ELSE 'unknown'
+             END AS age_bands
+FROM kccrime19_20
+WHERE involvement = 'SUS' OR involvement = 'ARR'
+GROUP BY age_bands;
+
+SELECT *
+FROM offenderagebands;
+
+WITH offenderage (ageconverted, age_bands, total)
+AS
+(SELECT a.ageconverted, a.age_bands, b.total
+FROM offenderagebands a
+CROSS JOIN
+(
+    SELECT SUM (ageconverted) AS total FROM offenderagebands) b
+)
+SELECT *, (ageconverted/total)*100 as age_band_percentage
+FROM offenderage;
+
+
+-- Firearms usage
+
+SELECT firearm_used, 
+       COUNT( CASE WHEN reported_date >= '2019-01-01' AND  reported_date <= '2019-12-31' THEN firearm_used END) AS firearmcount19,
+       COUNT( CASE WHEN reported_date >= '2020-01-01' AND  reported_date <= '2020-12-31' THEN firearm_used END) AS firearmcount20
+FROM distinctcrime
+GROUP BY firearm_used;
+
+-- Domestic violence incidents 
+
+SELECT dvflag, 
+       COUNT( CASE WHEN reported_date >= '2019-01-01' AND  reported_date <= '2019-12-31' THEN dvflag END) AS dvflag19,
+       COUNT( CASE WHEN reported_date >= '2020-01-01' AND  reported_date <= '2020-12-31' THEN dvflag END) AS dvflag20
+FROM distinctcrime
+GROUP BY dvflag;
